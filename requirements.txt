@@ -1,2 +1,4 @@
+ccxt
 lightgbm
 scikit-learn
+ta

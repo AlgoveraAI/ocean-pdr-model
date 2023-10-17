@@ -16,7 +16,7 @@ import pickle
 import lightgbm as lgb
 
 
-class RichardModel1:
+class OceanModel:
     def __init__(self,exchange,pair,timeframe):
         self.model_name=self.__class__.__name__
         self.model = [None] * 5
@@ -30,10 +30,9 @@ class RichardModel1:
     
     def add_ta(self,dataframe):
         df = copy.deepcopy(dataframe)
-        df.index.name = 'datetime'
-        df['timestamp'] = pd.to_datetime(df.index.values,utc=True)
-        for i, row in df.iterrows():
-            df.loc[i,"timestamp"]=df['timestamp'][i].timestamp()
+        df['datetime'] = pd.to_datetime(df.index.values, unit='s', utc=True)
+
+        print("Adding TA features...")
         df = ta.add_all_ta_features(
             df,
             open="open",
@@ -46,15 +45,17 @@ class RichardModel1:
         df['volume_adi_diff'] = df['volume_adi'].diff() 
         df['volume_obv_diff'] = df['volume_obv'].diff() 
         df['volume_nvi_diff'] = df['volume_nvi'].pct_change() 
+
+        print("Adding Time features...")
         df = self.get_time_features(df)
-        df = df.drop(["timestamp", 'volume_adi', 'volume_obv', 'volume_nvi', 'others_cr'], axis=1)
+        df = df.drop(['datetime', 'volume_adi', 'volume_obv', 'volume_nvi', 'others_cr'], axis=1)
         return df
 
     def get_time_features(self,df):
         df = df.assign(sin_month=np.zeros(len(df)), cos_month=np.zeros(len(df)), sin_day=np.zeros(len(df)), cos_day=np.zeros(len(df)), sin_hour=np.zeros(len(df)), cos_hour=np.zeros(len(df)), sin_minute=np.zeros(len(df)), cos_minute=np.zeros(len(df)),)
         time_features = np.zeros((len(df),8))
         for i in range(len(time_features)):
-            datetime = pd.to_datetime(df.index[i],unit="s",utc=True)
+            datetime = df['datetime'].iloc[i]
             time_features[i,0] = (np.sin(2 * np.pi * datetime.month/12))
             time_features[i,1] = (np.cos(2 * np.pi * datetime.month/12))
             time_features[i,2] = (np.sin(2 * np.pi * datetime.day/31))
@@ -69,7 +70,9 @@ class RichardModel1:
     
     
     def train_from_csv(self,path):
+        print("Reading CSV...")
         data = pd.read_csv(path)
+        data['timestamp'] = data['timestamp'] / 1000
         data = data.set_index("timestamp")
         self.train_from_dataframe(data)
     
@@ -78,7 +81,6 @@ class RichardModel1:
         data["return"] = data["close"].diff().shift(-1) / data["close"]
         data["y"] = np.sign(data["close"].diff().shift(-1))
         data = data.dropna()
-        print(data.tail(5))
         
         x = data.drop(["y", "return"], axis=1)
         r = data["return"]
@@ -95,7 +97,9 @@ class RichardModel1:
             'objective': 'multiclass',
             'num_class': 2,
         }
+        conf = 0.5
 
+        print("Training...")
         for split, (ind_train, ind_test) in enumerate(kf.split(x)):
             purge = 1
             ind_test = ind_test[purge:-purge]
@@ -112,25 +116,30 @@ class RichardModel1:
                       valid_sets=[train_dataset, val_dataset],
                       valid_names=['tr', 'vl'],
                       num_boost_round = 5000,
-                      verbose_eval = 100,     
                      )
 
-        
+            y_pred_conf = self.model[split].predict(x.iloc[ind_test, :])  
+            y_pred = (y_pred_conf[:,1] > conf).astype(int)
+            scores[split] = acc(y.iloc[ind_test], y_pred)
+
+        print('Scores: ', scores)
+        print('Mean Score: ', np.mean(scores))
     
     def predict(self,last_candles):
         main_pd_features = self.add_ta(last_candles)
         pred_list = np.zeros((self.n_fold,))
         conf_list = np.zeros((self.n_fold,))
         for split in range(self.n_fold):
-            predict = self.model[split].predict(main_pd_features.values[[-2], :]) 
+            predict = self.model[split].predict(main_pd_features.iloc[[-2], :]) 
             pred_list[split] = predict.argmax(axis=1)
             conf_list[split] = predict[:,1][0] 
         pred = np.median(pred_list, axis=0)    
         conf = np.median(conf_list, axis=0)    
 
-        return pred, main_pd_features.values[[-2], :]
+        return pred, conf
 
     def pickle_model(self,path):
+        print("Saving models...")
         for split in range(self.n_fold):
             model_name = path+"/"+self.model_name+"_"+self.exchange+"_"+self.pair+"_"+self.timeframe+"_fold"+str(split)+".pkl"
             with open(model_name, "wb") as f:
