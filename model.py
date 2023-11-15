@@ -130,7 +130,7 @@ class OceanModel:
         pred_list = np.zeros((self.n_fold,))
         conf_list = np.zeros((self.n_fold,))
         for split in range(self.n_fold):
-            predict = self.model[split].predict(main_pd_features.iloc[[-2], :]) 
+            predict = self.model[split].predict(main_pd_features.iloc[[-3], :]) 
             pred_list[split] = predict.argmax(axis=1)
             conf_list[split] = predict[:,1][0] 
         pred = np.median(pred_list, axis=0)    
